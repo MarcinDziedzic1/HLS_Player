@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <title>HLS Player</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script> <!-- :contentReference[oaicite:0]{index=0} -->
+
+  <style>
+    body          { font-family: system-ui, sans-serif; margin: 1rem; background:#f7f7f7; }
+    h1            { font-size:1.3rem; margin-bottom:.5rem; }
+    video         { width:100%; max-height:60vh; background:#000; border-radius:12px; }
+    #controls     { display:flex; flex-wrap:wrap; gap:.5rem; margin:1rem 0; align-items:center; }
+    select,button { padding:.4rem .6rem; border-radius:8px; border:1px solid #ccc; background:#fff; cursor:pointer; }
+    #qualityBtns button.active { outline:2px solid #0077ff; font-weight:bold; }
+    #info, #urls  { background:#fff; border:1px solid #ddd; border-radius:8px; padding:.7rem; margin-top:1rem; overflow:auto; }
+    #info p       { margin:.2rem 0; font-size:.9rem; }
+    #urls         { max-height:160px; font-size:.8rem; }
+    #urls li      { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  </style>
+</head>
+
+<body>
+<h1>HLS Player</h1>
+
+<!-- Lista gotowych playlist + pole własnego URL-a -->
+<div id="controls">
+  <label for="playlistSelect" name="playlistSelect">Wybierz playlistę:</label>
+  <select id="playlistSelect">
+    <option value="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8">Big Buck Bunny</option>
+    <option value="https://bitdash-a.akamaihd.net/content/sintel/hls/playlist.m3u8">Sintel</option>
+    <option value="https://d2zihajmogu5jn.cloudfront.net/bipbop-advanced/bipbop_16x9_variant.m3u8">BipBop</option>
+  </select>
+
+  <label for="customUrl" name="customUrl">lub wklej własny URL:</label>
+  <input id="customUrl" type="text" placeholder="https://…/stream.m3u8" size="36" />
+
+  <button id="loadBtn">Załaduj</button>
+</div>
+
+<video id="video" controls></video>
+
+<!-- Przyciski ręcznego wyboru bitrate -->
+<div id="qualityBtns"></div>
+
+<!-- Informacje o bieżącej jakości/codek-u -->
+<div id="info">
+  <strong>Informacje o strumieniu:</strong>
+  <p id="infoText">-</p>
+</div>
+
+<!-- Podgląd wszystkich pobieranych fragmentów -->
+<div id="urls">
+  <strong>Żądane URL-e:</strong>
+  <ul id="urlList"></ul>
+</div>
+
+<script>
+/* ------------------------- USTAWIENIA I HELPERY ------------------------- */
+const video       = document.getElementById('video');
+const playlistSel = document.getElementById('playlistSelect');
+const customUrl   = document.getElementById('customUrl');
+const loadBtn     = document.getElementById('loadBtn');
+const qualityBox  = document.getElementById('qualityBtns');
+const infoTxt     = document.getElementById('infoText');
+const urlList     = document.getElementById('urlList');
+
+let hls;            // instancja hls.js
+let currentLevels;  // tablica dostępnych poziomów jakości
+
+/* ------------------------------ FUNKCJE UI -------------------------------- */
+function clearQualityButtons() { qualityBox.innerHTML = ''; }
+
+function createQualityButtons(levels) {
+  clearQualityButtons();
+  levels.forEach((lvl, idx) => {
+    const btn = document.createElement('button');
+    const label = lvl.height ? `${lvl.height}p` : `${idx}`;
+    btn.textContent = label;
+    btn.onclick = () => {
+      hls.currentLevel = idx;
+      highlightActive(idx);
+    };
+    qualityBox.appendChild(btn);
+  });
+
+  // Auto (-1) przycisk
+  const autoBtn = document.createElement('button');
+  autoBtn.textContent = 'Auto';
+  autoBtn.onclick = () => { hls.currentLevel = -1; highlightActive(-1); };
+  qualityBox.appendChild(autoBtn);
+}
+
+function highlightActive(level) {
+  [...qualityBox.children].forEach(btn => btn.classList.remove('active'));
+  const idx = level === -1 ? currentLevels.length : level;
+  qualityBox.children[idx]?.classList.add('active');
+}
+
+function updateInfo(level) {
+  if (level === -1) {          // tryb „Auto”
+    infoTxt.textContent = 'Bitrate i kodeki dobierane adaptacyjnie';
+    return;
+  }
+
+  const l = currentLevels?.[level];
+  if (!l) return;
+
+  const br   = l.bitrate ? `${Math.round(l.bitrate / 1000)} kb/s` : '-';
+  const res  = l.width && l.height ? `${l.width}×${l.height}` : '-';
+
+  /* Kolejność priorytetów:
+     1) jawne pola videoCodec / audioCodec (hls.js ≥1.2)
+     2) atrybut CODECS z manifestu (starsze HLS-y)                       */
+  const codecsAttr = l.attrs?.CODECS || '';           // np. "avc1.64001f,mp4a.40.2"
+  const [cV, cA]   = codecsAttr.split(',');
+
+  const vcodec = l.videoCodec || cV || '-';
+  const acodec = l.audioCodec || cA || '-';
+
+  infoTxt.textContent =
+    `Bitrate: ${br}, Rozdzielczość: ${res}, Video: ${vcodec}, Audio: ${acodec}`;
+}
+
+
+/* --------------------------- GŁÓWNA LOGIKA ------------------------------- */
+function loadStream(url) {
+  if (!url) return;
+  if (hls) { hls.destroy(); }
+
+  if (Hls.isSupported()) {
+    hls = new Hls();
+    hls.loadSource(url);
+    hls.attachMedia(video);
+
+    /* Po załadowaniu manifestu tworzymy przyciski jakości */
+    hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
+      currentLevels = hls.levels;
+      createQualityButtons(currentLevels);
+      updateInfo(hls.currentLevel ?? 0);
+    });
+
+    /* Podświetlenie aktywnego poziomu */
+    hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => highlightActive(data.level));
+
+    /* Aktualizacja informacji po przełączeniu jakości */
+    hls.on(Hls.Events.LEVEL_LOADED, (_, data) => updateInfo(data.level));
+
+    /* Logowanie wszystkich pobieranych segmentów */
+    hls.on(Hls.Events.FRAG_LOADING, (_, data) => {
+      const li = document.createElement('li');
+      li.textContent = data.frag.url;
+      urlList.appendChild(li);
+      if (urlList.childElementCount > 50) urlList.removeChild(urlList.firstChild); // prosty limit
+    });
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    // Safari / urządzenia z natywnym HLS
+    video.src = url;
+  } else {
+    alert('Twoja przeglądarka nie obsługuje HLS 😞');
+  }
+}
+
+/* --------------------------- OBSŁUGA UI ---------------------------------- */
+loadBtn.onclick = () => {
+  const url = customUrl.value.trim() || playlistSel.value;
+  loadStream(url);
+};
+
+playlistSel.onchange = () => loadStream(playlistSel.value);
+
+/* Automatyczne wczytanie pierwszej playlisty przy starcie */
+loadStream(playlistSel.value);
+</script>
+</body>
+</html>
