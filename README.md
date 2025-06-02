@@ -20,6 +20,6 @@ Note: Browsers do not allow playing .m3u8 files via file://, so a local server i
 
 Sample HLS stream URLs:
 
-https://rbmn-live.akamaized.net/hls/live/590964/BoRB-AT/master.m3u8
-https://live-hls-web-aje.getaj.net/AJE/index.m3u8
-https://test-streams.mux.dev/pts_shift/master.m3u8
+   https://rbmn-live.akamaized.net/hls/live/590964/BoRB-AT/master.m3u8
+   https://live-hls-web-aje.getaj.net/AJE/index.m3u8
+   https://test-streams.mux.dev/pts_shift/master.m3u8
